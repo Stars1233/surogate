@@ -1,4 +1,5 @@
 #pragma once
+#include "family/impl/load/dflash.h"
 #include "family/impl/load/gemma_vision.h"
 
 #include "family/impl/moe/banked_experts.h"
@@ -19,6 +20,7 @@
 #include "core/tensor.h"
 
 #include <array>
+#include <optional>
 #include <vector>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +54,10 @@ inline constexpr std::size_t kGdnLayers = 0;
 struct WeightPlan {
     artifact::ObjectHandle object;
     artifact::NumericFormat format = artifact::NumericFormat::BF16;
+    /// The whole binding, which for NVFP4 carries the weight's two global divisors (the
+    /// activation one from `<name>/input_scale_divisor`). Every other format reads the same
+    /// Weight from it that `object` and `format` alone would give.
+    artifact::LinearBinding linear{};
 };
 
 /// The whole feed-forward half of a mixture layer, which is two branches and not one.
@@ -78,6 +84,10 @@ struct WeightPlan {
 struct MlpPlan {
     WeightPlan gate;
     WeightPlan up;
+    /// Gate and up as one `[gate; up]` matrix, where the artifact stores them so -- an NVFP4
+    /// export, whose 2,112-row halves are not a whole number of the format's 128-row scale
+    /// tiles and so exist only as the 4,224-row pair. `gate` and `up` are empty then.
+    std::optional<WeightPlan> gate_up;
     WeightPlan down;
     artifact::ObjectHandle post_feedforward_norm;
     artifact::ObjectHandle post_feedforward_norm_dense;
@@ -88,6 +98,16 @@ struct MlpPlan {
     artifact::ObjectHandle per_expert_scale;
     artifact::LinearBinding routed_gate_up;
     artifact::LinearBinding routed_down;
+    /// The routed-NVFP4 profile's per-expert arrays, bound exactly when the two routed weights
+    /// are NVFP4 (`routed_nvfp4.py` names and orders them): the second-level weight scale, the
+    /// activation divisor the W4A4 runner quantises with, and the epilogue alpha that undoes
+    /// both. Gate/up carries two second-level entries per expert, [up, gate].
+    std::optional<artifact::ObjectHandle> routed_gate_up_scale;
+    std::optional<artifact::ObjectHandle> routed_gate_up_act_scale;
+    std::optional<artifact::ObjectHandle> routed_gate_up_alpha;
+    std::optional<artifact::ObjectHandle> routed_down_scale;
+    std::optional<artifact::ObjectHandle> routed_down_act_scale;
+    std::optional<artifact::ObjectHandle> routed_down_alpha;
     artifact::ObjectHandle layer_scalar;
 };
 
@@ -162,6 +182,11 @@ struct BindingPlan : family::GemmaVisionPlan {
     /// untied export.
     WeightPlan output_head;
 
+    /// The separate DFlash drafter, where the artifact carries one (`dflash/*`); bound (for
+    /// validation) whether or not `--spec dflash` asked for it.
+    family::DFlashPlan dflash;
+    bool has_dflash = false;
+
     /// Objects this stage put in pinned host memory instead of on the card.
     ///
     /// The experts are the only thing worth moving and the only thing a round can absorb the
@@ -176,6 +201,10 @@ struct ArtifactLoadPlan {
     artifact::MaterializationPlan materialization;
 };
 
+/// The artifact's text geometry over the compiled config, with the DFlash drafter's where the
+/// artifact carries one. Binding and planning both read it, so they agree on the drafter.
+family::TextGeometry resolved_geometry(const artifact::Reader& reader);
+
 ArtifactLoadPlan bind_artifact(artifact::Binder& binder, WeightsProfile weights_profile,
                                family::StartupFeatures features,
                                std::uint32_t host_moe_layers = 0, std::uint32_t gpu_layers = 0,
@@ -186,6 +215,10 @@ struct MixturePostMixerPayload {
     family::BankedExperts banked;
     Weight gate;
     Weight up;
+    /// The fused `[gate; up]` projection of an NVFP4 dense feed-forward, or empty (null qdata)
+    /// where the artifact stores the two halves apart. Not named `gate_up`: the family's adapter
+    /// directory would read a member of that name as a LoRA-adaptable fused parent.
+    Weight fused_gate_up;
     Weight down;
     Tensor post_feedforward_norm;
     Tensor post_feedforward_norm_dense;
