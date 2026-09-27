@@ -149,10 +149,12 @@ std::string serve_usage_text(const char* argv0) {
            "[--max-request-mib N] [--media-cache-mib N] [--media-live-mib N] "
            "[--media-preprocess-threads N] "
            "[--request-log-jsonl FILE] "
+           "[--rate-limit-rps R --rate-limit-burst N] [--max-inflight-requests N] "
+           "[--max-thinking-requests N] [--max-image-requests N] "
            "[--kv-cache-dtype auto|bf16|fp8|fp8_e4m3|int8] [--kv-cache-dtype-skip-layers L,...] "
            "[--spec mtp|dflash --draft-tokens N] [--spec-max-lanes N|all] [--spec-adaptive] "
            "[--default-max-tokens N] "
-           "[--vision] [--offload-vision] [--offload-embeddings] [--offload-output-head] "
+           "[--vision] [--gemma-image-tokens 280|560|1120] [--offload-vision] [--offload-embeddings] [--offload-output-head] "
            "[--enforce-eager] [--no-prefix-reuse] "
            "[--enable-sleep-mode] [--elastic-kv|--no-elastic-kv] [--elastic-kv-overcommit] "
            "[--gpu-memory-limit-mib N] "
@@ -334,6 +336,17 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--max-pending-requests") {
             options.max_pending_requests = static_cast<std::uint32_t>(parse_nonnegative_int(
                 require_value("--max-pending-requests"), "max-pending-requests"));
+        } else if (arg == "--rate-limit-rps") {
+            options.rate_limit_rps = parse_float_in(require_value("--rate-limit-rps"),
+                                                    "rate-limit-rps", 0.001F, 1000000.0F);
+        } else if (arg == "--rate-limit-burst") {
+            options.rate_limit_burst = parse_model_count(require_value("--rate-limit-burst"), "rate-limit-burst");
+        } else if (arg == "--max-inflight-requests") {
+            options.max_inflight_requests = parse_model_count(require_value("--max-inflight-requests"), "max-inflight-requests");
+        } else if (arg == "--max-thinking-requests") {
+            options.max_thinking_requests = parse_model_count(require_value("--max-thinking-requests"), "max-thinking-requests");
+        } else if (arg == "--max-image-requests") {
+            options.max_image_requests = parse_model_count(require_value("--max-image-requests"), "max-image-requests");
         } else if (arg == "--pending-timeout-ms") {
             options.pending_timeout_ms = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--pending-timeout-ms"), "pending-timeout-ms"));
@@ -429,6 +442,12 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.offload_output_head = true;
         } else if (arg == "--vision") {
             options.enable_vision = true;
+        } else if (arg == "--gemma-image-tokens") {
+            const int tokens = parse_nonnegative_int(require_value("--gemma-image-tokens"), "gemma-image-tokens");
+            if (tokens != 280 && tokens != 560 && tokens != 1120) {
+                throw std::invalid_argument("--gemma-image-tokens must be 280, 560 or 1120");
+            }
+            options.gemma_image_tokens = tokens;
         } else if (arg == "--elastic-kv") {
             options.elastic_kv = true; // the default; kept so older launch lines still parse
         } else if (arg == "--no-elastic-kv") {
