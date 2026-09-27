@@ -3543,3 +3543,22 @@ Paired standalone checks found identical FP32 partials over 17 context/batch/win
 cases; Compute Sanitizer racecheck and memcheck passed a masked sliding-window case.
 The full attention and bidirectional suites passed, including added 7/9-query checks
 around the dispatch boundary. See deploy/rune-v3/ATTENTION_PARTIAL_PERFORMANCE.md.
+
+**DFlash decision bypass (2026-09-27).** One-token candidate-logit
+readouts in a DFlash engine use the target-only route, including image decisions and the
+initial/final scoring phases of thinking decisions. The reasoning generation still uses
+DFlash. GPU-prefix validation/storage is separate, so ordinary image readouts retain their
+vision memory plan. Target-only requests skip drafter resources and feature collection,
+use ordinary text prefill graphs and the small candidate head when eligible, and report no
+speculation. Admission stages readouts together; their prefill-only packs alternate with
+active reasoning decode rounds without entering verification. CPU policy tests cover phase
+selection and fair packing. Saved GPU-prefix requests retain their earlier admission and
+packing policy; widening their batches changed scores and failed the existing GPU test.
+The fixed implementation passes the new GPU regression with graphs and eager execution,
+including images and mixed generation, and the existing saved/nested-prefix test with zero
+logit difference. Authenticated HTTP and cancellation checks pass. Rune NVFP4 text capacity
+at 32 clients improves from 20.32 to 25.59 requests/s with DFlash, versus 28.91 with speculation
+off. All 432 serial single-question text answers match off; all 68 multi-question answers
+match previous DFlash; all 48 serial images match both. Concurrent batching and speculative
+reasoning can change scores and choices. See deploy/rune-v3/DFLASH_READOUT.md for the full
+comparison, remaining saved-prefix cost and deployment settings.
