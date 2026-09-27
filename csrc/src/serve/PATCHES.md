@@ -3494,3 +3494,25 @@ clients 52.9 -> 57.4 and 44.3 -> 48.4. Answers are bit-identical off and on and 
 decisions v1 golden set alone and under 8-client load, and at tolerance 0); the op test compares
 packed prompts with each prompt's own call bit for bit, output and cache, across Gemma-4 and other
 shapes, BF16 and FP8 caches, sliding windows and key-partition boundaries.
+
+**HTTP admission resources (2026-09-27).** `cpp-httplib::Response::hold_resource` retains
+multiple guards until response destruction. HTTP admission and model request lifetimes both
+use it; replacing the first guard would prematurely release a streaming admission slot.
+`test_http_admission.cpp` exercises composition and stream completion without a GPU.
+
+**Concurrent Gemma images (2026-09-27).** RequestMemory now suballocates disjoint, stable
+per-lane regions from its frozen startup allocation. Gemma 4 reserves at most eight times
+its single-image envelope, included in automatic KV sizing. Per-request text residuals are
+bounded by the actual prompt length. Admission checks free pool space, and all completion,
+cancellation, failed admission, OOM recovery and shutdown paths release lane ownership.
+Pipeline stages mirror the allocations. Image encoding/layer slices rotate among staged
+lanes so multiple images reach text prefill; ready image chunks may pack when no decode
+lanes need latency protection. A partially executed image text block must finish its sliced
+path before it can pack. The packed path already carries per-image attention boundaries.
+
+Rune NVFP4, 280 tokens: images improve from 16.65 requests/s (eight clients) to 24.01, and
+reach 27.90 at sixteen. At the chosen 1120-token budget, four clients deliver 6.14 requests/s
+versus the measured peak of 6.58. All 1196 accuracy cases succeeded at each of 280/560/1120.
+The faster batching changes floating-point GEMM shapes: old/new answers are not promised
+bitwise identical across batching geometries. Repeated fixed single-client execution was
+bitwise identical on 24 image cases, three passes. See deploy/rune-v3/RESULTS.md.
