@@ -279,6 +279,42 @@ Offloaded weight memory cannot be swapped out, so leave enough RAM for the opera
 and other applications. Loading large offloaded models also takes time on every start, even
 when model preparation is cached.
 
+### Flash-Next GSQ/RCO Q2_0
+
+The [GSQ/RCO Q2_0 export of Qwen3.8 Flash-Next](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF)
+uses Q2_0 routed experts and mixed quantization for the other projections. Surogate preserves
+those GGML blocks, including fused projections whose components use different formats.
+Small control tensors are decoded to their runtime floating-point format during preparation.
+Routed Q2_0 experts use INT8 tensor-core prefill by default; set
+`SUROGATE_SERVE_MOE_INT8=0` to use the BF16-activation prefill path instead.
+
+Download both Q2_0 shards into the same directory and pass the first shard:
+
+```bash
+surogate serve ~/models/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf \
+  --host 127.0.0.1 --port 8080 \
+  --gpu-layers all --host-moe-layers 0 \
+  --max-model-len 4096 --max-num-seqs 1 --kv-capacity auto
+```
+
+Keeping the experts on GPU avoids expert transfers during inference. If they do not fit,
+use the offload settings below. The Engram/PLE lookup table occupies approximately **28.8 GB
+of pinned system RAM**, even with all decoder layers on GPU. It is loaded from disk at
+startup, and the GPU fetches the selected rows over PCIe; the full table does not occupy VRAM.
+
+Keep the original GGUF shards available: the prepared artifact references their weight data.
+To accept images, also download the matching `mmproj-Qwen3.8-Flash-Next-BF16.gguf` from
+the same release and add `--vision --mmproj ~/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf`.
+The vision tower stays BF16. Both chat completions and decisions accept images, including
+multiple images and image requests with thinking enabled. Adapters with native GGML shared
+experts are not currently supported.
+
+The [Decisions API](decisions.md) accepts choice, noul and score questions, including shared
+state and option-order averaging. Decision `thinking: true` uses Qwen's reasoning markers:
+uncertain questions generate a thought, then score the choices after `</think>\n\n`.
+Thinking and option-order averaging cannot be combined. Chat generation uses Qwen's own
+thinking template through `chat_template_kwargs.enable_thinking`.
+
 ### Using CPU cores and an expert cache
 
 Every supported MoE generation model can cache frequently used offloaded experts on the GPU
